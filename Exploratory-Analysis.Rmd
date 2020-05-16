@@ -2,9 +2,7 @@
 title: "Time Series Project - Exploratory Analysis"
 author: "Jainam Mehta"
 date: "16 May 2020"
-output:
-  html_document: default
-  pdf_document: default
+output: rmarkdown::github_document
 ---
 
 ```{r setup, include=FALSE}
