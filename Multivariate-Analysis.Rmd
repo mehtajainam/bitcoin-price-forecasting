@@ -13,97 +13,257 @@ Import necessary libraries
 ```{r message=FALSE, warning=FALSE}
 library(tseries)
 library(forecast)
+library(tidyverse)
+library(MTS)
+library(imputeTS)
+library(TSA)
+library(lubridate)
+library(vars)
 ```
 
 ## Data Prep
 
-Read in the data
+Download various datasets from Quandl
+
+* BTC Market price (https://www.quandl.com/data/BCHAIN/MKPRU-Bitcoin-Market-Price-USD)
+* ETH to USD rate (https://www.quandl.com/data/GDAX/ETH_USD-ETH-USD-Exchange-Rate)
+* LTC to USD rate (https://www.quandl.com/data/GDAX/LTC_USD-LTC-USD-Exchange-Rate)
+* ETH to BTC rate (https://www.quandl.com/data/GDAX/ETH_BTC-ETH-BTC-Exchange-Rate)
+* LTC to BTC rate (https://www.quandl.com/data/GDAX/LTC_BTC-LTC-BTC-Exchange-Rate)
+* Bitcoin Miners Revenue (https://www.quandl.com/data/BCHAIN/MIREV-Bitcoin-Miners-Revenue)
+* Number of Transactions (https://www.quandl.com/data/BCHAIN/NTRAN-Bitcoin-Number-of-Transactions)
+
 ```{r message=FALSE, warning=FALSE}
 library(Quandl)
 Quandl.api_key("UqYbx-p5DwWzyT8AH2c7")
-marketpriceUSD<-Quandl("BCHAIN/MKPRU")
+
+# Select the relevant series
+BTC_USD_raw<-Quandl("BCHAIN/MKPRU")
+ETH_USD_raw<-Quandl("GDAX/ETH_USD")
+LTC_USD_raw<-Quandl("GDAX/LTC_USD")
+ETH_BTC_raw<-Quandl("GDAX/ETH_BTC")
+LTC_BTC_raw<-Quandl("GDAX/LTC_BTC")
+
+# Select non-price predictors
+MIREV_raw<-Quandl("BCHAIN/MIREV")
+NTRAN_raw<-Quandl("BCHAIN/NTRAN")
 ```
 
-Reverse the series to get prices in chronological order
+
+Create a function to convert the data into proper time series objects. 
+This function reverses the time series so that it is chrononlogical and then assigns it to a time series object with the correct start date.
 ```{r}
-chron <- rev(marketpriceUSD$Value)
-c(start = tail(marketpriceUSD$Date, 1), end = head(marketpriceUSD$Date, 1))
-```
-
-Covert to time series object
-```{r}
-BTC <- ts(chron, start = c(2009, 1, 3), frequency = 365)
-
-# focus on 2016 onwards
-train <- window(BTC, start = 2016, end  = 2020)
-test <- window(BTC, start = 2020)
-```
-
-Plot the data and run tests for stationarity
-```{r}
-plot(train)
-
-acf(train); pacf(train)
-
-adf.test(train)
-kpss.test(train)
-```
-The plot, along with both ADF and KPSS tests suggest that the series is definitely non-stationary.
-
-Take first differences to see if the series can be made stationary
-```{r}
-train.diff <- diff(train, lag = 1)
-plot(train.diff)
-adf.test(train.diff)
-kpss.test(train.diff)
-```
-Taking a difference with lag = 1 seems to make the series stationary.
-
-
-## Model Fitting
-
-Fit an ARIMA model using auto.arima() function
-```{r}
-(fit <- auto.arima(train, allowdrift = T))
-forecast <- forecast(fit, h=138)
-plot(forecast)
-```
-
-Check residuals
-```{r}
-residuals <- test - forecast$mean
-mean(residuals)
-checkresiduals(residuals)
-```
-
-DirRec method of forecasting
-```{r}
-train.append <- train
-dirrec.forecast <- c()
-dirrec.model <- list()
-
-for (i in 1:30) {
-  model <- auto.arima(train.append)
-  dirrec.model[[i]] <- model
-  f <- forecast(model, h = 1)$mean
-  dirrec.forecast <- c(dirrec.forecast, f)
-  train.append <- ts(c(train.append, f), start = c(1975, 1), frequency = 12)
+create_ts <- function(rawdata) {
+  # use opening price, if Value column doesn't exist
+  if (!"Value" %in% colnames(rawdata)) {rawdata$Value <- rawdata$Open} 
+  
+  rawdata$Date <- as.Date(rawdata$Date)
+  # fill missing dates with NA.
+  rawdata <- complete(rawdata, Date = seq(min(Date), max(Date), by = "day")) 
+  #year <- as.numeric(format(rawdata$Date,'%Y'))[1]
+  #month <- as.numeric(format(rawdata$Date,'%m'))[1]
+  #day <- as.numeric(format(rawdata$Date,'%d'))[1]
+  
+  return(ts(rawdata$Value, decimal_date(as.Date(rawdata$Date[1])), frequency = 365))
 }
 ```
 
-Compare the Recursive and DirRec forecasts
-```{r}
-plot(1:30, test[1:30], type = 'l', lwd = 2,
-     main = 'Bitcoin price in Jan 2020',
-     xlab = 'January', ylab = 'Price')
-lines(1:30, forecast$mean[1:30], type = 'l', lwd = 2, col = 'purple')
-lines(1:30, dirrec.forecast, type = 'l', lwd = 2, col = 'orange')
-legend("topright", legend=c("Actual", "Rec", "DirRec"),
-       col=c("black", "purple", "orange"), lty=1, cex=0.8)
 
-#forecast$mean[1:30]
-#dirrec.forecast
+Create time series objects for all data
+```{r}
+BTC_USD <- create_ts(BTC_USD_raw)
+plot(BTC_USD)
+
+ETH_USD <- create_ts(ETH_USD_raw)
+plot(ETH_USD)
+
+LTC_USD <- create_ts(LTC_USD_raw)
+plot(LTC_USD)
+
+ETH_BTC <- create_ts(ETH_BTC_raw)
+plot(ETH_BTC)
+
+LTC_BTC <- create_ts(LTC_BTC_raw)
+plot(LTC_BTC)
+
+MIREV <- create_ts(MIREV_raw)
+plot(MIREV)
+
+NTRAN <- create_ts(NTRAN_raw)
+plot(NTRAN)
+
 ```
+
+Function to create imputed series
+```{r}
+series_names <- list(BTC_USD, ETH_USD, LTC_USD, ETH_BTC, LTC_BTC, MIREV, NTRAN)
+train <- matrix()
+test <- matrix()
+
+for (i in series_names) {
+  imputed <- na_interpolation(i, option = 'linear')
+  plotNA.imputations(i, imputed)
+  tr <- window(imputed, start = 2018, end = 2019)
+  plot(tr)
+  te <- window(imputed, start = 2020, end = c(2020, 90))
+  plot(te)
+  test <- cbind(test, te)
+}
+```
+
+Manually created imputed series for ETH_USD and LTC_USD
+```{r}
+ETH_USD.imp <- na_interpolation(ETH_USD, option = 'spline')
+plotNA.imputations(ETH_USD, ETH_USD.imp)
+
+LTC_USD.imp <- na_interpolation(LTC_USD, option = 'spline')
+plotNA.imputations(LTC_USD, LTC_USD.imp)
+```
+
+
+Create train and test splits for each
+```{r}
+BTC_USD.train <- window(BTC_USD, start = 2018, end = 2020)
+MIREV.train <- window(MIREV, start = 2018, end = 2020)
+NTRAN.train <- window(NTRAN, start = 2018, end = 2020)
+ETH_USD.train <- window(ETH_USD.imp, start = 2018, end = 2020)
+LTC_USD.train <- window(LTC_USD.imp, start = 2018, end = 2020)
+
+BTC_USD.test <- window(BTC_USD, start = 2020, end = c(2020, 90))
+MIREV.test <- window(MIREV, start = 2020, end = c(2020, 90))
+NTRAN.test <- window(NTRAN, start = 2020, end = c(2020, 90))
+ETH_USD.test <- window(ETH_USD.imp, start = 2020, end = c(2020, 90))
+LTC_USD.test <- window(LTC_USD.imp, start = 2020, end = c(2020, 90))
+
+plot(BTC_USD.train, main = 'Train')
+plot(BTC_USD.test, main = 'Test')
+```
+
+
+
+
+
+# Multivariate Analysis
+
+Select the 3 series of the market prices of BTC, ETH and LTC.
+```{r}
+cryptos <- na.omit(cbind(BTC_USD.train, ETH_USD.train, LTC_USD.train))
+head(cryptos)
+plot(cryptos)
+
+cor(cryptos)
+```
+Not that the series are all quite correlated as expected.
+
+
+Run tests for stationarity.
+```{r}
+apply(cryptos, 2, adf.test)
+apply(cryptos, 2, kpss.test)
+```
+
+Since the series are all non-stationary, we take first differences
+```{r}
+cryptos.stnry <- diffM(cryptos)
+
+# Run stationarity tests to check now
+apply(cryptos.stnry, 2, adf.test)
+#apply(cryptos.stnry, 2, kpss.test)
+```
+
+Plot the differenced series
+```{r}
+plot.ts(cryptos.stnry)
+```
+
+Identify the Lag orders.
+We will use two different functions, from two different packages to identify the lag order for the VAR model. Both functions are quite similar to each other but differ in the output they produce. vars::VAR is a more powerful and convinient function to identify the correct lag order. 
+```{r}
+VARselect(cryptos.stnry, 
+          type = "none", #type of deterministic regressors to include. We use none becasue the time series was made stationary using differencing above. 
+          lag.max = 10) #highest lag order
+
+```
+
+Creating a VAR model with vars
+```{r}
+var.a <- vars::VAR(cryptos.stnry,
+                   lag.max = 10, #highest lag order for lag length selection according to the choosen ic
+                   ic = "AIC", #information criterion
+                   type = "none") #type of deterministic regressors to include
+summary(var.a)
+
+```
+
+Residual diagnostics
+```{r}
+#serial.test function takes the VAR model as the input.  
+serial.test(var.a)
+```
+
+Run Granger test for causality. We want to check if ETH and LTC prices do indeed affect BTC or not
+```{r}
+# for causality function to give reliable results we need all the variables of the multivariate time series to be stationary. 
+causality(var.a, cause = c("ETH_USD.train", "LTC_USD.train")) #cause variable
+```
+We reject the null hypothesis and therefore show that ETH and LTC do cause BTC. 
+
+
+Forecasting with the VAR model
+```{r}
+fcast = predict(var.a, n.ahead = 30) # we forecast over a short horizon because beyond short horizon prediction becomes unreliable or uniform
+par(mar = c(2.5,2.5,2.5,2.5))
+plot(fcast)
+```
+
+Extracting the BTC forecast
+```{r}
+# Forecasting the DAX index
+BTC.fcast = fcast$fcst[1]
+head(BTC.fcast)
+
+BTC.preds <- BTC.fcast$BTC_USD.train[,1]; # extract just the predictions
+BTC.preds # one month predictions
+```
+
+To get the data to the original scale we need to invert the time series
+```{r}
+#since the values are just difference from the previous value, to get the values on the original scale we add the last value from the BTC time series to the predicted values.
+tail(cryptos)[6,1]
+BTC.preds = cumsum(BTC.preds) + as.numeric(tail(cryptos)[6,1])
+BTC.preds = ts(BTC.preds, start = c(2020, 1), frequency = 365)
+plot(BTC.preds, main = "30 day BTC forecast")
+```
+
+Plot the forecast alongside the actual values
+```{r}
+par(mar = c(2.5,2.5,1,2.5)) #bottom, left, top, and right
+plot(BTC.preds, main = "30 day BTC forecast", col = 'red', lwd = 2, ylim = c(7000, 9000))
+lines(index(BTC.preds), window(BTC_USD.test, end=c(2020, 30)), col = 'black', lwd = 2)
+```
+
+
+
+
+## VARMA() method from class
+
+Run a multivariate model using VARMA().
+```{r}
+m1 <- VARMA(cryptos)
+summary(m1)
+acf(resid(m1))
+```
+
+References: https://bookdown.org/singh_pratap_tejendra/intro_time_series_r/multivariate-ts-analysis.html
+
+
+
+
+
+
+
+
+
 
 
 
