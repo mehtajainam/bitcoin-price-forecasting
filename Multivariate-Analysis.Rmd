@@ -120,6 +120,13 @@ LTC_USD.imp <- na_interpolation(LTC_USD, option = 'spline')
 plotNA.imputations(LTC_USD, LTC_USD.imp)
 ```
 
+Take log of the data
+```{r}
+BTC_USD <- log(BTC_USD)
+ETH_USD <- log(ETH_USD)
+LTC_USD <- log(LTC_USD)
+```
+
 
 Create train and test splits for each
 ```{r}
@@ -141,15 +148,13 @@ plot(BTC_USD.test, main = 'Test')
 
 
 
-
-
 # Multivariate Analysis
 
 Select the 3 series of the market prices of BTC, ETH and LTC.
 ```{r}
-cryptos <- na.omit(cbind(BTC_USD.train, ETH_USD.train, LTC_USD.train))
+cryptos <- na.omit(cbind(BTC = BTC_USD.train, ETH = ETH_USD.train, LTC = LTC_USD.train))
 head(cryptos)
-plot(cryptos)
+plot(cryptos, main = 'Crypto Market Price in USD')
 
 cor(cryptos)
 ```
@@ -193,7 +198,16 @@ var.a <- vars::VAR(cryptos.stnry,
                    type = "none") #type of deterministic regressors to include
 summary(var.a)
 
+
+?VAR
 ```
+
+```{r}
+var.a$p
+```
+
+
+
 
 Residual diagnostics
 ```{r}
@@ -204,9 +218,11 @@ serial.test(var.a)
 Run Granger test for causality. We want to check if ETH and LTC prices do indeed affect BTC or not
 ```{r}
 # for causality function to give reliable results we need all the variables of the multivariate time series to be stationary. 
-causality(var.a, cause = c("ETH_USD.train", "LTC_USD.train")) #cause variable
+causality(var.a, cause = c("ETH", "LTC")) #cause variable
+causality(var.a, cause = c("BTC")) #cause variable
 ```
 We reject the null hypothesis and therefore show that ETH and LTC do cause BTC. 
+However, BTC also causes ETH and LTC.
 
 
 Forecasting with the VAR model
@@ -222,7 +238,7 @@ Extracting the BTC forecast
 BTC.fcast = fcast$fcst[1]
 head(BTC.fcast)
 
-BTC.preds <- BTC.fcast$BTC_USD.train[,1]; # extract just the predictions
+BTC.preds <- BTC.fcast$BTC[,1]; # extract just the predictions
 BTC.preds # one month predictions
 ```
 
@@ -231,6 +247,7 @@ To get the data to the original scale we need to invert the time series
 #since the values are just difference from the previous value, to get the values on the original scale we add the last value from the BTC time series to the predicted values.
 tail(cryptos)[6,1]
 BTC.preds = cumsum(BTC.preds) + as.numeric(tail(cryptos)[6,1])
+BTC.preds = exp(BTC.preds)
 BTC.preds = ts(BTC.preds, start = c(2020, 1), frequency = 365)
 plot(BTC.preds, main = "30 day BTC forecast")
 ```
@@ -239,9 +256,26 @@ Plot the forecast alongside the actual values
 ```{r}
 par(mar = c(2.5,2.5,1,2.5)) #bottom, left, top, and right
 plot(BTC.preds, main = "30 day BTC forecast", col = 'red', lwd = 2, ylim = c(7000, 9000))
-lines(index(BTC.preds), window(BTC_USD.test, end=c(2020, 30)), col = 'black', lwd = 2)
+lines(index(BTC.preds), window(exp(BTC_USD.test), end=c(2020, 30)), col = 'black', lwd = 2)
+legend("topleft", legend=c("Actual", "Preds"),
+       col=c("black", "red"), lty=1, cex=1)
 ```
 
+Calculate errors and metrics
+```{r}
+accuracy(window(exp(BTC_USD.test), end=c(2020, 30)), BTC.preds)
+
+errors <- window(BTC_USD.test, end=c(2020, 30)) - BTC.preds
+checkresiduals(errors)
+
+# sMAPE
+library(TSPred)
+sMAPE(window(exp(BTC_USD.test), end=c(2020, 30)), BTC.preds)
+
+# Training residuals
+checkresiduals(var.a$varresult$BTC$residuals)
+
+```
 
 
 
@@ -255,12 +289,6 @@ acf(resid(m1))
 ```
 
 References: https://bookdown.org/singh_pratap_tejendra/intro_time_series_r/multivariate-ts-analysis.html
-
-
-
-
-
-
 
 
 
