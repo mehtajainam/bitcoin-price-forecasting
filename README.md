@@ -20,4 +20,4 @@ This project and repository comprises the following modeling approaches:
 5. Prophet by Facebook
 6. Neural Network - LSTM
 
-**The best model selected using the sMAPE metric was the ARFIMA + Holt Winters model, which was able to predict the price of bitcoin in January 2020 with an average error of US$787.**
+**The best model selected using the sMAPE metric was the LSTM model, which was able to predict the price of bitcoin in January 2020 with an average error of US$604.**
