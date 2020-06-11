@@ -1,0 +1,274 @@
+---
+title: "Untitled"
+author: "Manaswi Mishra"
+date: "6/1/2020"
+output: html_document
+---
+Time Series Project - Quandl Data using Prophet
+
+## Read Data and Import Libraries
+
+```{r} 
+
+library(tseries)
+library(prophet)
+library(forecast)
+library(Quandl)
+library(stringr)
+
+```
+Downloading data from Quandl
+``` {r}
+
+Quandl.api_key("UqYbx-p5DwWzyT8AH2c7")
+btc_usd<-Quandl("BCHAIN/MKPRU") #Market price BTC to USD
+
+```
+
+Convert to chronological order and time series object for visualization
+purpose. (Prophet works with dataframe and not time series objects)
+
+Visualize basic plots for the 3 different time series objects
+
+``` {r}
+library(xts)
+btc_usd_ts <- xts(btc_usd[,2], order.by=as.Date(btc_usd[,1], "%Y-%m-%d"))
+autoplot(btc_usd_ts)
+
+#Reducing the time frame as pre-2017 there was hardly any information in the time series
+btc_usd_2017_2020<-btc_usd_ts["2017-01-01/"]
+autoplot(btc_usd_2017_2020)
+```
+
+```{r}
+#Confirming Start and End date
+chron <- rev(btc_usd$Value)
+c(start = tail(btc_usd$Date, 1), end = head(btc_usd$Date, 1))
+
+```
+
+```{r}
+#Create train test for the TS
+
+#Find row numbers of relevent dates
+train_row<-which(btc_usd$Date == "2019-12-31")
+test_row<-which(btc_usd$Date == "2020-01-31")
+
+
+
+#Find start of 2016
+base_date<-which(btc_usd$Date == "2016-06-01")
+
+
+btc_usd_train<-btc_usd[(train_row):(base_date) , ]
+btc_usd_test<-btc_usd[(test_row):(train_row-1) , ]
+
+btc_usd_test_ts <- xts(btc_usd_test[,2], order.by=as.Date(btc_usd_test[,1], "%Y-%m-%d"))
+autoplot(btc_usd_test_ts)
+
+btc_uds_train_ts<-xts(btc_usd_train[,2], order.by=as.Date(btc_usd_train[,1], "%Y-%m-%d"))
+autoplot(btc_uds_train_ts,)
+
+```
+```{r}
+#Try and look into the decomposed TS
+rev_ts<-btc_usd_train[nrow(btc_usd_train):1,]
+rev_ts_btc = ts(rev_ts$Value ,frequency = 365)
+
+decompose_ts = decompose(rev_ts_btc, "additive")
+
+plot(decompose_ts)
+
+rev_ts_btc_m<-msts(rev_ts$Value,seasonal.periods = c(7,365.25),start=c(2016,182))
+decompose_ts_m = decompose(rev_ts_btc_m, "multiplicative")
+
+plot(decompose_ts_m)
+```
+
+Try a TBATS model for basic fitting
+```{r}
+#fit <- tbats(rev_ts_btc_m)
+#fc <- forecast(fit,h=30)
+#plot(fc)
+```
+
+
+## Prophet Model for BTC-USD
+
+```{r}
+#Build function to customize dataframe as Prophet input, put start year for the starting year of subset
+prophet_df <- function(dat,year){
+  colnames(dat) <- c("ds", "y")
+  print(summary(dat))
+  new = subset(dat, format(as.Date(ds),"%Y")>=year)
+  lam = BoxCox.lambda(new$y, method = "loglik")
+  new$y = BoxCox(new$y, lam)
+  fin_list = list('lam'=lam,'df'=new)
+  return(fin_list)
+}
+btc_usd_prop = prophet_df(btc_usd_train, year = "2016")
+
+
+```
+
+``` {r}
+m1 = prophet(btc_usd_prop$df, changepoint.prior.scale =0.0129, seasonality.mode = "multiplicative", changepoint.range = 0.90 )
+
+#0.0129
+#, changepoints = c('2017-01-01','2018-01-01','2019-01-01','2019-06-01','2019-12-30'),changepoint.range = 1 
+#, yearly.seasonality = 5,                 
+#try for 100% learn and then yearly seasonality  ,yearly.seasonality =TRUE, seasonality.mode = "additive"
+# ,yearly.seasonality = TRUE
+#
+```
+
+
+
+``` {r}
+future <- make_future_dataframe(m1, periods = 180)
+forecast.m1 <- predict(m1, future)
+plot(m1,forecast.m1,xlabel = 'Time',ylabel = 'Log(BTC price)')+add_changepoints_to_plot(m1)
+
+```
+
+
+
+
+```{r}
+
+#Inverse values using the inverse box cox
+
+inverse_forecast <- forecast.m1
+inverse_forecast$yhat_untransformed = InvBoxCox(forecast.m1$yhat, btc_usd_prop$lam)
+
+final_forecast<-xts(inverse_forecast['yhat_untransformed'], order.by=as.Date(inverse_forecast[,1], "%Y-%m-%d"))
+
+predict_final_forecast<-final_forecast["2020/2020-01"]
+
+
+
+#plotting together
+#Convert to Zoo so as to embed 2 plots
+predict_final_forecast_zoo<-zoo(ts(predict_final_forecast,start=c(2020,1),frequency=365))
+
+
+btc_usd_test_ts_zoo<-zoo(ts(btc_usd_test_ts,start=c(2020,1),frequency=365))
+
+plot.zoo(cbind(predict_final_forecast_zoo, btc_usd_test_ts_zoo), 
+         plot.type = "single", 
+         col = c("red", "blue"),xlab = 'Time Jan 2020', ylab='BTC price')
+
+
+```
+
+
+```{r}
+prophet_plot_components(m1,forecast.m1)
+```
+
+
+```{r}
+tail(forecast.m1[,c('ds', 'yhat', 'yhat_lower', 'yhat_upper')])
+```
+
+
+Analyze Residual for BTC-USD model
+
+``` {r}
+#reversing the row order of the TS
+a<-apply(as.matrix(btc_usd_prop$df$y),2,rev)
+plot(a,type = "l")
+
+m1.resid.new<-ts(a-forecast.m1$yhat[1:nrow(btc_usd_prop$df)],start=c(2016,182), frequency = 365.25)
+ts.plot(m1.resid.new)
+summary(m1.resid.new)
+#checkresiduals(m1)
+```
+
+``` {r}
+hist(m1.resid.new)
+qqnorm(m1.resid.new, pch = 1)
+qqline(m1.resid.new, col = "steelblue", lwd = 2)
+```
+```{r}
+acf(m1.resid.new,lag=100)
+
+```
+
+``` {r}
+adf.test(m1.resid.new)
+```
+
+``` {r}
+kpss.test(m1.resid.new)
+```
+
+
+``` {r}
+shapiro.test(m1.resid.new)
+```
+
+Residuals are stationary but the distribution is not normal (looking at
+the QQ plot and Shapiro Wilk test results)
+
+
+```{r}
+#Creating Cross Validation metric
+
+df.cv<-cross_validation(m1, initial = 720, period=15, horizon = 30, units = 'days')
+
+df.p <- performance_metrics(df.cv)
+df.p
+plot(df.p$mae,xlab = "Days",ylab = "log(MAE) value",type="l")
+```
+
+```{r}
+# Validation using MAE
+performace<-df.p[c(1,4)]
+
+invBoxCox <- function(x, lambda)
+    		if (lambda == 0) exp(x) else (lambda*x + 1)^(1/lambda)
+
+performace$mae<-invBoxCox(performace$mae,btc_usd_prop$lam)
+
+plot(performace,type="l")
+
+```
+
+```{r}
+#sMAPE
+library(yardstick)
+
+print("Prophet sMAPE value for the month of Jan 2020")
+(sMAPE.prop<- smape_vec(as.numeric(btc_usd_test_ts_zoo),as.numeric(predict_final_forecast_zoo)))
+
+library(regression_metrics)
+(MAE.prop<- abs(mean((btc_usd_test_ts_zoo),(predict_final_forecast_zoo))))
+
+library(forecast)
+accuracy(ts(btc_usd_test_ts_zoo), ts(predict_final_forecast_zoo))
+
+```
+
+```{r}
+test2<-btc_usd_ts["2020-01-01/2020-06-01"]
+predicted_xts <- xts(forecast.m1['yhat'], order.by=as.Date(forecast.m1[,1], "%Y-%m-%d"))
+
+predicted_xts_2020<-predicted_xts["2020-01-01/2020-06-01"]
+invBoxCox <- function(x, lambda)
+    		if (lambda == 0) exp(x) else (lambda*x + 1)^(1/lambda)
+
+predicted_xts_2020$yhat<-invBoxCox(predicted_xts_2020$yhat,btc_usd_prop$lam)
+
+
+#plotting together
+#Convert to Zoo so as to embed 2 plots
+a1<-zoo(predicted_xts_2020)
+
+
+a2<-zoo(test2)
+
+plot.zoo(cbind(a1, a2), 
+         plot.type = "single", 
+         col = c("red", "blue"),xlab = 'Time', ylab='BTC price/Predicted Price')
+```
