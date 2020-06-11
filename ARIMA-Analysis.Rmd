@@ -30,11 +30,11 @@ chron <- rev(marketpriceUSD$Value)
 c(start = tail(marketpriceUSD$Date, 1), end = head(marketpriceUSD$Date, 1))
 ```
 
-Covert to time series object
+Take log of series and convert to time series object
 ```{r}
 BTC <- ts(chron, start = c(2009, 1, 3), frequency = 365)
 
-# focus on 2016 onwards
+# focus on 2018 onwards
 train <- window(BTC, start = c(2018,1), end  = c(2019,365))
 test <- window(BTC, start = c(2020, 1), end = c(2020, 30))
 ```
@@ -67,15 +67,13 @@ Taking a difference with lag = 1 seems to make the series stationary.
 Fit an ARIMA model using auto.arima() function
 ```{r}
 (fit <- auto.arima(train, allowdrift = T))
-forecast <- forecast(fit, h=138)
+forecast <- forecast(fit, h=30)
 plot(forecast)
 ```
 
-Check residuals
+Check residuals on training data
 ```{r}
-residuals <- test - forecast$mean
-mean(residuals)
-checkresiduals(residuals)
+checkresiduals(fit)
 ```
 
 DirRec method of forecasting
@@ -107,7 +105,22 @@ legend("topright", legend=c("Actual", "Rec", "DirRec"),
 #dirrec.forecast
 ```
 
+Calculate errors and metrics
+```{r}
+library(TSPred)
 
+# Recurive method
+errors <- test - forecast$mean[1:30]
+checkresiduals(errors)
+accuracy(test, forecast$mean[1:30])
+sMAPE(test, forecast$mean[1:30])
+
+# DirRec method
+errors <- test - dirrec.forecast
+checkresiduals(errors)
+accuracy(test, dirrec.forecast)
+sMAPE(test, dirrec.forecast)
+```
 
 
 
